@@ -56,21 +56,14 @@ public:
 
   VJ_OrientalMaster();
 
-  // Bind bus (Stream) used for Modbus RTU.
-  // NOTE: You must init RS485 (baud/parity/half-duplex) in your main program.
   bool begin(Stream& bus);
 
   void setEventCallback(EventCallback cb);
   void setPollIntervalMs(uint32_t intervalMs);
   void setInterframeDelayMs(uint16_t delayMs);
 
-  // Some AZD alarms require ALM-RST to be ON for longer than the 250 µs auto-off pulse.
-  // Default: 20 ms.
   void setResetPulseMs(uint16_t pulseMs);
 
-  // Register/configure a motor (slave id) and define scaling ratios.
-  // Ratios: values sent TO the drive are multiplied by R_POS/R_SPD/R_ACC/R_DEC/R_CUR.
-  // Returned feedback/command position are divided by R_FBP/R_CMP.
   bool MPA(uint8_t id,
            int32_t R_POS,
            int32_t R_SPD,
@@ -82,39 +75,33 @@ public:
 
   // Send motion parameters (Direct Data Operation) to a motor.
   // Unspecified fields keep the last value for that motor.
+  // Trigger is "1" (all updated) like before.
   bool SMP(uint8_t id, const SMPFields& f);
 
-  // Inputs (reference) - set a specific input to state (like old example, writes a mask).
+  // --- Variant A helpers (Direct Data speed update) ---
+  // Set trigger (32-bit signed) e.g. -4 => operating speed update (FFFF FFFC).
+  bool DDOSetTrigger(uint8_t id, int32_t trigger32);
+
+  // Write ONLY operating speed (32-bit signed, Hz) into direct data area (0x005E/0x005F).
+  // If trigger is -4, writing speed updates immediately during direct data operation.
+  bool DDOSetOperatingSpeed(uint8_t id, int32_t speedHz);
+
   bool SIN(uint8_t id, Input input, bool state);
   bool SIN(uint8_t id, const char* inputName, bool state);
 
-  // Inputs (pulse) - auto-off pulse command.
   bool SIP(uint8_t id, Input input);
   bool SIP(uint8_t id, const char* inputName);
 
-  // Outputs
   bool GOU(uint8_t id, Output output, bool& value);
   bool GOU(uint8_t id, uint16_t& rawWord);
 
-  // Positions
-  bool GFP(uint8_t id, int32_t& value); // feedback position (scaled by R_FBP)
-  bool GCP(uint8_t id, int32_t& value); // command position  (scaled by R_CMP)
+  bool GFP(uint8_t id, int32_t& value); // feedback position
+  bool GCP(uint8_t id, int32_t& value); // command position
 
-  // Debug/diagnostics: read current alarm code (0 = no alarm)
   bool getPresentAlarmCode(uint8_t id, uint16_t& alarmCode);
 
-  // Call often in loop(): handles output polling + change notifications.
   void update();
 
-  // Optional string command interface (same syntax you described):
-  //   MPA(1,100,1,1,1,1,10,10)
-  //   SMP(I1,O3,P2000,S5000,A1500000,D1500000,C1000)
-  //   SIN(RESET,1)
-  //   SIP(RESET)
-  //   GOU(READY)
-  //   GFP(VALUE)
-  //   GCP(VALUE)
-  // Replies are set in 'reply'. Returns true if command understood.
   bool execute(const String& cmd, String& reply);
 
 private:
@@ -159,16 +146,19 @@ private:
   static constexpr uint16_t REG_DDO_BASE = 0x0058;
   static constexpr uint16_t REG_DDO_WORDS = 16;
 
+  // Direct data sub-addresses (upper word address)
+  static constexpr uint16_t REG_DDO_SPD_UP   = 0x005E; // 0x005E/0x005F
+  static constexpr uint16_t REG_DDO_TRIG_UP  = 0x0066; // 0x0066/0x0067
+
   static constexpr uint16_t REG_IN_AUTO_UP = 0x0078;
   static constexpr uint16_t REG_IN_REF_UP  = 0x007C;
   static constexpr uint16_t REG_OUT_LO     = 0x007F;
 
-  static constexpr uint16_t REG_PRES_ALM_UP = 0x0080; // present alarm (monitor command)
+  static constexpr uint16_t REG_PRES_ALM_UP = 0x0080;
 
   static constexpr uint16_t REG_FBPOS_UP   = 0x0120;
   static constexpr uint16_t REG_CMDPOS_UP  = 0x0122;
 
-  // helpers
   MotorState* findMotor(uint8_t id);
   MotorState* ensureMotor(uint8_t id);
 
@@ -191,6 +181,9 @@ private:
   bool readOutRaw(uint8_t id, uint16_t& raw);
   bool readPresentAlarm(uint8_t id, uint16_t& alarmCode);
   bool read32(uint8_t id, uint16_t addrUpper, int32_t& value);
+
+  // helper for 32-bit writes (upper+lower)
+  bool write32(uint8_t id, uint16_t addrUpper, int32_t value);
 
   static bool parseInt(const String& s, int32_t& out);
   static bool parseUInt(const String& s, uint32_t& out);

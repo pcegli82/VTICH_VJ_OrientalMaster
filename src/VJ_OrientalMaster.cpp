@@ -192,6 +192,62 @@ bool VJ_OrientalMaster::SMP(uint8_t id, const SMPFields& f) {
   return writeMultiple(id, REG_DDO_BASE, w, REG_DDO_WORDS);
 }
 
+bool VJ_OrientalMaster::write32(uint8_t id, uint16_t addrUpper, int32_t value) {
+  uint16_t regs[2] = { hi16(value), lo16(value) };
+  return writeMultiple(id, addrUpper, regs, 2);
+}
+
+// --- Variant A helpers (Direct Data speed update) ---
+bool VJ_OrientalMaster::DDOSetTrigger(uint8_t id, int32_t trigger32) {
+  (void)ensureMotor(id);
+  // trigger is 32-bit signed (e.g. -4 => FFFF FFFC)
+  return write32(id, REG_DDO_TRIG_UP, trigger32);
+}
+
+bool VJ_OrientalMaster::DDOSetOperatingSpeed(uint8_t id, int32_t speedHz) {
+  MotorState* m = ensureMotor(id);
+  if (!m) return false;
+  // scale with R_SPD
+  int32_t scaled = scaleMul(speedHz, m->rSpd);
+  m->spd = scaled; // keep cache consistent (optional)
+  return write32(id, REG_DDO_SPD_UP, scaled);
+}
+
+// SMP bleibt wie vorher, nur trigger sauber als 32-bit schreiben
+bool VJ_OrientalMaster::SMP(uint8_t id, const SMPFields& f) {
+  MotorState* m = ensureMotor(id);
+  if (!m) return false;
+
+  if (f.hasOpType) m->opType = f.opType;
+  if (f.hasOpDataNo) m->opDataNo = f.opDataNo;
+
+  if (f.hasPos) m->pos = scaleMul(f.pos, m->rPos);
+  if (f.hasSpd) m->spd = scaleMul(f.spd, m->rSpd);
+  if (f.hasAcc) m->acc = scaleMul(f.acc, m->rAcc);
+  if (f.hasDec) m->dec = scaleMul(f.dec, m->rDec);
+  if (f.hasCur) {
+    int32_t scaled = scaleMul((int32_t)f.cur, m->rCur);
+    m->cur = clampU16(scaled, 0, 1000);
+  }
+
+  uint16_t w[REG_DDO_WORDS] = {0};
+  w[0]  = 0x0000;  w[1]  = m->opDataNo;
+  w[2]  = 0x0000;  w[3]  = m->opType;
+
+  w[4]  = hi16(m->pos); w[5]  = lo16(m->pos);
+  w[6]  = hi16(m->spd); w[7]  = lo16(m->spd);
+  w[8]  = hi16(m->acc); w[9]  = lo16(m->acc);
+  w[10] = hi16(m->dec); w[11] = lo16(m->dec);
+
+  w[12] = 0x0000;  w[13] = m->cur;
+
+  // trigger = 1 (all data updated) => 32-bit: 0x0000 0001
+  w[14] = 0x0000;
+  w[15] = 0x0001;
+
+  return writeMultiple(id, REG_DDO_BASE, w, REG_DDO_WORDS);
+}
+
 static uint16_t inputBitMask(VJ_OrientalMaster::Input input) {
   switch (input) {
     case VJ_OrientalMaster::START: return (1u << 3);
