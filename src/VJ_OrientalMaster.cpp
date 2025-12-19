@@ -21,6 +21,13 @@ void VJ_OrientalMaster::setInterframeDelayMs(uint16_t delayMs) {
   _interframeDelayMs = delayMs;
 }
 
+void VJ_OrientalMaster::setResetPulseMs(uint16_t pulseMs) {
+  // Keep it sensible. Many drives need ALM-RST held for a few ms.
+  if (pulseMs < 2) pulseMs = 2;
+  if (pulseMs > 500) pulseMs = 500;
+  _resetPulseMs = pulseMs;
+}
+
 VJ_OrientalMaster::MotorState* VJ_OrientalMaster::findMotor(uint8_t id) {
   for (auto &m : _motors) {
     if (m.used && m.id == id) return &m;
@@ -205,6 +212,17 @@ bool VJ_OrientalMaster::SIN(uint8_t id, Input input, bool state) {
 
 bool VJ_OrientalMaster::SIP(uint8_t id, Input input) {
   (void)ensureMotor(id);
+
+  // IMPORTANT:
+  // The Modbus "automatic OFF" register clears after 250 µs.
+  // This is great for START/ZHOME/STOP/FREE, but ALM-RST often needs a longer ON time.
+  // Therefore, we pulse RESET via the reference register for _resetPulseMs.
+  if (input == RESET) {
+    if (!SIN(id, RESET, true)) return false;
+    delay(_resetPulseMs);
+    return SIN(id, RESET, false);
+  }
+
   uint16_t mask = inputBitMask(input);
   uint16_t regs[2] = {0x0000, mask};
   return writeMultiple(id, REG_IN_AUTO_UP, regs, 2);
@@ -217,6 +235,19 @@ bool VJ_OrientalMaster::readOutRaw(uint8_t id, uint16_t& raw) {
   return true;
 }
 
+bool VJ_OrientalMaster::readPresentAlarm(uint8_t id, uint16_t& alarmCode) {
+  // Monitor command: present alarm code (0 = no alarm).
+  // Stored in two registers (upper/lower). We use the lower word.
+  uint16_t regs[2] = {0, 0};
+  if (!readHolding(id, REG_PRES_ALM_UP, 2, regs)) return false;
+  alarmCode = regs[1];
+  return true;
+}
+
+bool VJ_OrientalMaster::getPresentAlarmCode(uint8_t id, uint16_t& alarmCode) {
+  return readPresentAlarm(id, alarmCode);
+}
+
 bool VJ_OrientalMaster::GOU(uint8_t id, uint16_t& rawWord) {
   return readOutRaw(id, rawWord);
 }
@@ -225,9 +256,20 @@ bool VJ_OrientalMaster::GOU(uint8_t id, Output output, bool& value) {
   uint16_t raw = 0;
   if (!readOutRaw(id, raw)) return false;
 
+  // Alarm is more reliable via present alarm code than via output assignment.
+  if (output == ALARM) {
+    uint16_t code = 0;
+    if (readPresentAlarm(id, code)) {
+      value = (code != 0);
+      return true;
+    }
+    // fallback to output bit if alarm code isn't readable (older firmware)
+    value = (raw & (1u << 7)) != 0;
+    return true;
+  }
+
   switch (output) {
     case READY: value = (raw & (1u << 5)) != 0; break;
-    case ALARM: value = (raw & (1u << 7)) != 0; break;
     case BUSY:  value = (raw & (1u << 8)) != 0; break;
     case MOVE:  value = (raw & (1u << 13)) != 0; break;
     case INPOS: value = (raw & (1u << 14)) != 0; break;
@@ -284,6 +326,11 @@ void VJ_OrientalMaster::update() {
 
     bool rdy = (raw & (1u << 5)) != 0;
     bool alm = (raw & (1u << 7)) != 0;
+    // Prefer "present alarm code" (monitor) because R-OUT assignments can be changed by parameters.
+    uint16_t alarmCode = 0;
+    if (readPresentAlarm(m.id, alarmCode)) {
+      alm = (alarmCode != 0);
+    }
     bool mov = (raw & (1u << 13)) != 0;
     bool ipo = (raw & (1u << 14)) != 0;
 
