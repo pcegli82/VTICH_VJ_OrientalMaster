@@ -144,54 +144,6 @@ bool VJ_OrientalMaster::MPA(uint8_t id,
   return true;
 }
 
-bool VJ_OrientalMaster::SMP(uint8_t id, const SMPFields& f) {
-  MotorState* m = ensureMotor(id);
-  if (!m) return false;
-
-  // Update cached values (apply scaling)
-  if (f.hasOpType) m->opType = f.opType;
-  if (f.hasOpDataNo) m->opDataNo = f.opDataNo;
-
-  if (f.hasPos) m->pos = scaleMul(f.pos, m->rPos);
-  if (f.hasSpd) m->spd = scaleMul(f.spd, m->rSpd);
-  if (f.hasAcc) m->acc = scaleMul(f.acc, m->rAcc);
-  if (f.hasDec) m->dec = scaleMul(f.dec, m->rDec);
-  if (f.hasCur) {
-    // current is 0..1000 (0.1%). Apply ratio then clamp.
-    int32_t scaled = scaleMul((int32_t)f.cur, m->rCur);
-    m->cur = clampU16(scaled, 0, 1000);
-  }
-
-  // Build 16 registers for Direct Data Operation 0x0058..0x0067.
-  // Layout: opDataNo, opType, pos, spd, acc, dec, cur, trigger=1
-  uint16_t w[REG_DDO_WORDS] = {0};
-  w[0]  = 0x0000;
-  w[1]  = m->opDataNo;
-
-  w[2]  = 0x0000;
-  w[3]  = m->opType;
-
-  w[4]  = hi16(m->pos);
-  w[5]  = lo16(m->pos);
-
-  w[6]  = hi16(m->spd);
-  w[7]  = lo16(m->spd);
-
-  w[8]  = hi16(m->acc);
-  w[9]  = lo16(m->acc);
-
-  w[10] = hi16(m->dec);
-  w[11] = lo16(m->dec);
-
-  w[12] = 0x0000;
-  w[13] = m->cur;
-
-  w[14] = 0x0000;
-  w[15] = 0x0001; // trigger: all data updated
-
-  return writeMultiple(id, REG_DDO_BASE, w, REG_DDO_WORDS);
-}
-
 bool VJ_OrientalMaster::write32(uint8_t id, uint16_t addrUpper, int32_t value) {
   uint16_t regs[2] = { hi16(value), lo16(value) };
   return writeMultiple(id, addrUpper, regs, 2);
