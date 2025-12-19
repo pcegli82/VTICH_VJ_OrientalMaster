@@ -59,7 +59,17 @@ static void trySetResponseTimeout(...) {}
 
 void VJ_OrientalMaster::beginTxn(uint8_t id) {
   _node.begin(id, *_bus);
-  // reduce blocking if supported
+// best-effort: unterschiedliche ModbusMaster-Forks
+template<typename T>
+static auto trySetTimeout(T& node, uint16_t ms, int) -> decltype(node.setTimeout(ms), void()) { node.setTimeout(ms); }
+static void trySetTimeout(...) {}
+
+template<typename T>
+static auto trySetResponseTimeout(T& node, uint16_t ms, int) -> decltype(node.setResponseTimeout(ms), void()) { node.setResponseTimeout(ms); }
+static void trySetResponseTimeout(...) {}
+
+void VJ_OrientalMaster::beginTxn(uint8_t id) {
+  _node.begin(id, *_bus);
   trySetTimeout(_node, _mbTimeoutMs, 0);
   trySetResponseTimeout(_node, _mbTimeoutMs, 0);
 }
